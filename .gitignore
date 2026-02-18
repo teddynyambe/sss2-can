@@ -1,0 +1,9 @@
+.pio/
+.vscode/
+*.pyc
+.DS_Store
+*.swp
+*.bak
+*.log
+*.tmp
+
