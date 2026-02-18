@@ -43,6 +43,54 @@
 #include "SSS2_board_defs_rev_5.h"
 #include "SSS2_functions.h"
 
+// J1939 static NAME and address for SSS2
+#define J1939_STATIC_NAME 0x81228409E9000001ULL
+#define J1939_STATIC_ADDRESS 128
+#define J1939_PGN_PROPRIETARY_B 0x00EF00
+
+// J1939 Address Claim message (8 bytes)
+uint8_t j1939_name_bytes[8] = {
+  0x01, 0x00, 0x00, 0xE9, 0x09, 0x84, 0x22, 0x81 // LSB first (NAME = 0x81228409E9000001)
+};
+
+// Helper: Compose 29-bit CAN ID for J1939 PGN and destination
+uint32_t j1939_make_id(uint32_t pgn, uint8_t dest) {
+  // Priority 6, Data Page 0, Extended Frame
+  return (6UL << 26) | (pgn << 8) | dest;
+}
+
+// Helper: Send J1939 Address Claim
+void j1939_send_address_claim() {
+  uint32_t id = j1939_make_id(0x00EE00, 0xFF); // PGN 60928, global
+  // Use Can0 for J1939
+  CAN_message_t msg;
+  msg.id = id;
+  msg.ext = 1;
+  msg.len = 8;
+  for (int i = 0; i < 8; i++) msg.buf[i] = j1939_name_bytes[i];
+  Can0.write(msg);
+}
+
+// Helper: Check if CAN message is J1939 PGN 0x00EF00
+bool is_j1939_pgn_ef00(const CAN_message_t& msg) {
+  // Extract PGN from 29-bit ID
+  uint32_t pgn = (msg.id >> 8) & 0xFFFF;
+  pgn |= ((msg.id >> 16) & 0xFF) << 16;
+  return (pgn == J1939_PGN_PROPRIETARY_B);
+}
+
+// Handle incoming J1939 proprietary command (PGN 0x00EF00)
+void handle_j1939_command(const CAN_message_t& msg) {
+  // Example: Byte 0 = setting index, Byte 1 = value (expand as needed)
+  if (msg.len < 2) return;
+  uint8_t setting = msg.buf[0];
+  int16_t value = msg.buf[1];
+  // Optionally, parse more bytes for multi-byte values
+  // Call same logic as serial command
+  setSetting(setting, value, DEBUG_ON);
+  Serial.printf("INFO: Setting %d updated to %d via CAN (PGN 0x00EF00)\n", setting, value);
+}
+
 //softwareVersion
 String softwareVersion = "SSS2*REV" + revision + "*1.1*master*feaf4593b427b5ebe96f3d96ef746ec59d722ef9"; //Hash of the previous git commit
 
@@ -151,6 +199,10 @@ void setup() {
   commandString="1";
   setEnableComponentInfo();
   reloadCAN();
+
+  // J1939: Claim static address at boot
+  j1939_send_address_claim();
+  Serial.printf("INFO: J1939 static address claim sent (NAME=0x%016llX, Addr=%d)\n", (unsigned long long)J1939_STATIC_NAME, J1939_STATIC_ADDRESS);
 }
 
 void loop() {
@@ -163,6 +215,11 @@ void loop() {
     if (displayCAN0) printFrame(rxmsg, -1, 0, RXCount0);
     redLEDstate = !redLEDstate;
     digitalWrite(redLEDpin, redLEDstate);
+
+    // J1939: Check for proprietary command PGN 0x00EF00
+    if (is_j1939_pgn_ef00(rxmsg)) {
+      handle_j1939_command(rxmsg);
+    }
   }
   if (Can1.available()) {
     Can1.read(rxmsg);
