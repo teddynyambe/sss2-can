@@ -414,9 +414,13 @@ public:
 
     //Write the data to the CAN bus.
     if (ok_to_send && ignitionCtlState){
-      if      (channel == 0) Can0.write(txmsg);
-      else if (channel == 1) Can1.write(txmsg);
-      else if (channel == 2) MCPCAN.sendMsgBuf(txmsg.id,txmsg.ext,txmsg.len,txmsg.buf);
+      // BLOCKED: All periodic CanThread transmission disabled.
+      // The SSS2 was flooding all CAN buses with all-zero-payload simulation messages on
+      // every enabled CanThread tick when ignition was on. All three channels are blocked
+      // below until message payloads are properly populated and transmission is desired.
+      //if      (channel == 0) Can0.write(txmsg);
+      //else if (channel == 1) Can1.write(txmsg);
+      //else if (channel == 2) MCPCAN.sendMsgBuf(txmsg.id,txmsg.ext,txmsg.len,txmsg.buf);
   
       
       transmit_number++;
