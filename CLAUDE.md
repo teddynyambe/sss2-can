@@ -76,3 +76,33 @@ Defined in `platformio.ini`:
 ### EEPROM
 
 Component ID is stored in EEPROM starting at a high address (~1000+). Modified via the `CI` / `changeComponentID()` command.
+
+---
+
+## Working State (as of 2026-02-25)
+
+### Verified Working Features
+
+- **Ignition control via J1939 on CAN0** — Send `SET 50,1` as a J1939 Proprietary A (PGN 0xEF00) message addressed to SA=0x80 on `can0` (250 kbps). SSS2 responds with a service response frame and turns on the ignition relay.
+- **CAN simulation messages on can0** — When ignition is ON (`setting 50 = 1`), all 17 default simulation messages (HRW, EBC1, CCVS1, CM1, PTO, AMB) are broadcast on `can0` at configured intervals. Visible with `candump can0`.
+- **J1708 mode default on J24:17-18** — `CAN1Switch = false` (setting 39 = 0) is the default so J24:17-18 uses the J1708 transceiver, not CAN1. This prevents FlexCAN1 errors when nothing is connected to those pins.
+
+### Physical Bus Mapping
+
+| Linux IF | J24 pins | SSS2 interface | Bitrate | Notes |
+|----------|----------|----------------|---------|-------|
+| `can0` | J24:22/21 | FlexCAN0 (CAN0) | 250 kbps | ECU simulation bus; ignition cmd received here |
+| — | J24:17/18 | J1708 (Serial3) | 9,600 bps | Default mode (`CAN1Switch=false`); set `39,1` to switch to CAN1 |
+| — | J18:15/16 | MCP2515 (MCPCAN) | 250 kbps | Setting 40; separate connector |
+
+### Key Defaults
+
+| Setting | Name | Default | Effect |
+|---------|------|---------|--------|
+| 39 | `CAN1Switch` | **0 (false)** | J24:17-18 = J1708 mode; set to 1 for CAN1 at 250 kbps |
+| 40 | `CAN2Switch` | true | MCPCAN enabled |
+| 50 | `ignitionCtlState` | false | Ignition off at boot |
+
+### Interrupt Safety Note
+
+`FlexCAN::addToRingBuffer()` is not interrupt-safe. The 1ms `CANTimer` interrupt (CanThread) and `loop()` both call `Can0.write()`. All `bus.write()` calls originating from `loop()` — in `j1939_send_address_claim`, `j1939_send_cannot_claim`, and `j1939_send_service_response` — are wrapped with `noInterrupts()`/`interrupts()` to prevent ring buffer corruption. CanThread writes do not need this guard since they run from within the interrupt.

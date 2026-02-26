@@ -76,7 +76,7 @@ void j1939_send_address_claim(FlexCAN& bus, const uint8_t* name_bytes) {
   msg.ext = 1;
   msg.len = 8;
   for (int i = 0; i < 8; i++) msg.buf[i] = name_bytes[i];
-  bus.write(msg);
+  noInterrupts(); bus.write(msg); interrupts();
 }
 
 // Helper: Check if an incoming Address Claim targets our SA (contention)
@@ -105,7 +105,7 @@ void j1939_send_cannot_claim(FlexCAN& bus, const uint8_t* name_bytes) {
   msg.ext = 1;
   msg.len = 8;
   for (int i = 0; i < 8; i++) msg.buf[i] = name_bytes[i];
-  bus.write(msg);
+  noInterrupts(); bus.write(msg); interrupts();
 }
 
 // Helper: Returns true if msg is a J1939 Proprietary A (PF=0xEF) addressed to our SA or broadcast
@@ -131,7 +131,7 @@ void j1939_send_service_response(FlexCAN& bus, uint8_t dest_sa, uint8_t setting_
   msg.buf[3] = (uint8_t)((value >> 8) & 0xFF);
   msg.buf[4] = status;
   msg.buf[5] = msg.buf[6] = msg.buf[7] = 0xFF;
-  bus.write(msg);
+  noInterrupts(); bus.write(msg); interrupts();
 }
 
 // Handle incoming J1939 Proprietary A service request (PGN 0xEF00)
@@ -443,7 +443,7 @@ void loop() {
 
   // J1939: per-bus ignition edge detection and 250ms claim timer
   j1939_update_ignition(Can0, j1939_can0, j1939_name_can0, 0);
-  j1939_update_ignition(Can1, j1939_can1, j1939_name_can1, 1);
+  if (CAN1Switch) j1939_update_ignition(Can1, j1939_can1, j1939_name_can1, 1);
 
   /****************************************************************/
   /*            Begin Serial Command Processing                   */
