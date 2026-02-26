@@ -134,7 +134,18 @@ void j1939_send_service_response(FlexCAN& bus, uint8_t dest_sa, uint8_t setting_
   noInterrupts(); bus.write(msg); interrupts();
 }
 
+// Per-bus J1939 address claim state (must be declared before handle_j1939_service)
+struct J1939BusState {
+  bool address_claimed  = false;
+  bool address_failed   = false;
+  bool boot_claim_sent  = false;   // true after first claim is queued from loop()
+  elapsedMillis claim_timer;
+};
+J1939BusState j1939_can0;
+J1939BusState j1939_can1;
+
 // Handle incoming J1939 Proprietary A service request (PGN 0xEF00)
+// Responds to any valid request addressed to our SA (address claiming does not gate this).
 void handle_j1939_service(const CAN_message_t& msg, FlexCAN& bus) {
   if (msg.len < 5) return;
   uint8_t  cmd     = msg.buf[0];
@@ -149,34 +160,14 @@ void handle_j1939_service(const CAN_message_t& msg, FlexCAN& bus) {
   }
 
   if (cmd == J1939_SVC_SET_SETTING) {
-    // Ignition-off whitelist: only setting 50 value 1 is allowed cold
-    bool ign_required = (!ignitionCtlState && !(setting == 50 && value == 1));
-    if (ign_required) {
-      j1939_send_service_response(bus, src_sa, setting, 0, J1939_SVC_IGN_REQUIRED);
-      return;
-    }
     int16_t result = setSetting(setting, value, DEBUG_ON);
     j1939_send_service_response(bus, src_sa, setting, result, J1939_SVC_STATUS_OK);
 
   } else if (cmd == J1939_SVC_GET_SETTING) {
-    if (!ignitionCtlState && setting != 50) {
-      j1939_send_service_response(bus, src_sa, setting, 0, J1939_SVC_IGN_REQUIRED);
-      return;
-    }
     int16_t result = setSetting(setting, -1, DEBUG_OFF);  // -1 = read-only
     j1939_send_service_response(bus, src_sa, setting, result, J1939_SVC_STATUS_OK);
   }
 }
-
-// Per-bus J1939 address claim state
-struct J1939BusState {
-  bool address_claimed = false;
-  bool address_failed  = false;
-  elapsedMillis claim_timer;
-  bool prev_ignition   = false;
-};
-J1939BusState j1939_can0;
-J1939BusState j1939_can1;
 
 // Helper: Consolidates address-claim NM handling for one bus
 void j1939_handle_nm(const CAN_message_t& msg, FlexCAN& bus,
@@ -202,26 +193,30 @@ void j1939_handle_nm(const CAN_message_t& msg, FlexCAN& bus,
   }
 }
 
-// Helper: Per-bus ignition edge detection and 250ms claim timer
+// Helper: boot claim + 250ms promotion + 2s retry (called every loop iteration)
 void j1939_update_ignition(FlexCAN& bus, J1939BusState& state,
                              const uint8_t* name, uint8_t bus_num) {
-  if (ignitionCtlState && !state.prev_ignition) {
-    state.address_claimed = false;
-    state.address_failed  = false;
+  // Send the initial claim on the very first loop() call (CAN bus fully stable by then)
+  if (!state.boot_claim_sent) {
+    j1939_send_address_claim(bus, name);
+    state.claim_timer    = 0;
+    state.boot_claim_sent = true;
+    Serial.printf("INFO: J1939 Can%d address claim sent at boot (Addr=0x%02X)\n",
+                  bus_num, J1939_STATIC_ADDRESS);
+    return;
+  }
+
+  if (state.address_claimed || state.address_failed) return;
+
+  // Retry every 2 s while unclaimed (e.g. bus not yet ready at boot)
+  if (state.claim_timer >= 2000) {
     j1939_send_address_claim(bus, name);
     state.claim_timer = 0;
-    Serial.printf("INFO: J1939 Can%d address claim sent (Addr=0x%02X)\n",
-                  bus_num, J1939_STATIC_ADDRESS);
+    return;
   }
-  if (!ignitionCtlState && state.prev_ignition) {
-    state.address_claimed = false;
-    state.address_failed  = false;
-    Serial.printf("INFO: J1939 Can%d address released.\n", bus_num);
-  }
-  state.prev_ignition = ignitionCtlState;
 
-  if (ignitionCtlState && !state.address_claimed && !state.address_failed
-      && state.claim_timer >= 250) {
+  // Promote to confirmed-claimed 250 ms after last send with no contention
+  if (state.claim_timer >= 250) {
     state.address_claimed = true;
     Serial.printf("INFO: J1939 Can%d address 0x%02X claimed.\n",
                   bus_num, J1939_STATIC_ADDRESS);
@@ -337,8 +332,7 @@ void setup() {
   commandString="1";
   setEnableComponentInfo();
   reloadCAN();
-
-  // J1939: address claim deferred until ignition turns on
+  // J1939 address claim is sent on the first loop() iteration via j1939_update_ignition()
 }
 
 void loop() {
@@ -352,9 +346,8 @@ void loop() {
     redLEDstate = !redLEDstate;
     digitalWrite(redLEDpin, redLEDstate);
 
-    // J1939: only active while ignition is on
-    if (ignitionCtlState)
-      j1939_handle_nm(rxmsg, Can0, j1939_can0, j1939_name_can0, J1939_NAME_CAN0);
+    // J1939: NM handling always active (address claim is independent of ignition)
+    j1939_handle_nm(rxmsg, Can0, j1939_can0, j1939_name_can0, J1939_NAME_CAN0);
 
     // J1939: Proprietary A service dispatcher — always-on, outside ignition gate
     if (is_j1939_proprietary_a_for_us(rxmsg)) handle_j1939_service(rxmsg, Can0);
@@ -369,9 +362,8 @@ void loop() {
       digitalWrite(greenLEDpin, greenLEDstate);
     }
 
-    // J1939: only active while ignition is on
-    if (ignitionCtlState)
-      j1939_handle_nm(rxmsg, Can1, j1939_can1, j1939_name_can1, J1939_NAME_CAN1);
+    // J1939: NM handling always active (address claim is independent of ignition)
+    j1939_handle_nm(rxmsg, Can1, j1939_can1, j1939_name_can1, J1939_NAME_CAN1);
 
     // J1939: Proprietary A service dispatcher — always-on, outside ignition gate
     if (is_j1939_proprietary_a_for_us(rxmsg)) handle_j1939_service(rxmsg, Can1);
