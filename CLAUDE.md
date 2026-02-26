@@ -79,7 +79,7 @@ Component ID is stored in EEPROM starting at a high address (~1000+). Modified v
 
 ---
 
-## Working State (as of 2026-02-25)
+## Working State — confirmed good checkpoint `c14248a` (2026-02-25)
 
 ### Verified Working Features
 
